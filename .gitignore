@@ -1,6 +1,19 @@
+# Dependencies
 node_modules/
+
+# Build output
 main.js
 *.js.map
+
+# AI / Claude
+.claude/
+CLAUDE.md
+
+# macOS
 .DS_Store
+
+# Obsidian user data
 data.json
+
+# Local dev config
 justfile
