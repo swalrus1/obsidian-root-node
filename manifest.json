@@ -1,0 +1,10 @@
+{
+	"id": "root-notes-view",
+	"name": "Root Notes View",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Lists notes with no backlinks in a side panel. Highlights cycle representatives in red.",
+	"author": "",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}

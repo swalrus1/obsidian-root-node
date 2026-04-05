@@ -1,0 +1,20 @@
+{
+  "name": "root-notes-view",
+  "version": "1.0.0",
+  "description": "Obsidian plugin that lists root notes (no backlinks) in a side panel",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "GPL-3.0-or-later",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "builtin-modules": "4.0.0",
+    "esbuild": "0.25.5",
+    "obsidian": "latest",
+    "typescript": "5.8.3"
+  }
+}
