@@ -124,16 +124,16 @@ Returns `rootNodes[]`, `cycleNodes[]`, `outLinks`, `inLinks`.
 
 ### `computeTitle(rootPath, outLinks, inLinks, app): string | null`
 
-Computes the display title of a root node using the `thread` property from each note's frontmatter (read via `app.metadataCache.getCache(path)?.frontmatter`).
+Computes the display title of the root of a maximum inclusion chain using the `chain` property from each note's frontmatter (read via `app.metadataCache.getCache(path)?.frontmatter`).
 
 **Algorithm:**
-1. BFS from `rootPath` over `outLinks` → `subgraph: Set<path>`.
-2. For each node in the subgraph, read `frontmatter.thread` and normalise to `string[]`.
-3. **Elimination rule:** a node X's thread value A is eliminated if any node Y in the subgraph with a *non-overlapping* thread value links directly to X (Y → X). This encodes "Y's thread overrides X's thread".
-4. Collect surviving thread values as candidates:
+1. BFS from `rootPath` over `outLinks` → `chain: Set<path>`.
+2. For each note in the chain, read `frontmatter.chain` and normalise to `string[]`.
+3. **Elimination rule:** a note X's chain value A is eliminated if any note Y in the chain with a *non-overlapping* chain value references X directly (Y → X). This encodes "Y's chain value overrides X's".
+4. Collect surviving chain values as candidates:
    - 0 candidates → return `null` (caller uses `file.basename`).
    - 1 candidate → return it.
-   - 2+ candidates → return `"thread collision: [A, B, ...]"`.
+   - 2+ candidates → return `"chain collision: [A, B, ...]"`.
 
 No external plugin dependency — uses Obsidian's native metadata cache directly.
 

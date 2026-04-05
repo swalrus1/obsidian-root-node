@@ -16,7 +16,7 @@ const VIEW_TYPE_THREAD = "thread-view";
 
 const LOG_PREFIX = "[root-notes-view]";
 
-function normalizeThread(val: unknown): string[] {
+function normalizeChain(val: unknown): string[] {
 	if (val === null || val === undefined) return [];
 	if (Array.isArray(val)) return val.map((v) => String(v));
 	return [String(val)];
@@ -29,7 +29,7 @@ interface LinkMaps {
 
 interface GraphData extends LinkMaps {
 	rootNodes: string[];
-	cycleNodes: string[];
+	cycleRoots: string[];
 }
 
 interface TitleEntry {
@@ -116,11 +116,11 @@ export default class RootNotesPlugin extends Plugin {
 
 	rebuildTitleMap() {
 		try {
-			const { rootNodes, cycleNodes, outLinks, inLinks } = computeGraph(this.app);
+			const { rootNodes, cycleRoots, outLinks, inLinks } = computeGraph(this.app);
 
 			this.titleMap.clear();
 
-			for (const path of [...rootNodes, ...cycleNodes]) {
+			for (const path of [...rootNodes, ...cycleRoots]) {
 				const file = this.app.vault.getAbstractFileByPath(path);
 				if (!(file instanceof TFile)) {
 					console.warn(LOG_PREFIX, `Expected a TFile at path "${path}" but got none.`);
@@ -234,33 +234,28 @@ class RootNotesView extends ItemView {
 			return;
 		}
 
-		const { rootNodes, cycleNodes, outLinks, inLinks } = graphData;
+		const { rootNodes, cycleRoots, outLinks, inLinks } = graphData;
 
-		if (rootNodes.length === 0 && cycleNodes.length === 0) {
+		if (rootNodes.length === 0 && cycleRoots.length === 0) {
 			container.createEl("p", { text: "No root notes found.", cls: "root-notes-empty" });
 			return;
 		}
 
 		const ul = container.createEl("ul", { cls: "root-notes-list" });
 
-		for (const path of rootNodes) {
-			const file = app.vault.getAbstractFileByPath(path);
-			if (!(file instanceof TFile)) {
-				console.warn(LOG_PREFIX, `Expected a TFile at path "${path}" but got none.`);
-				continue;
-			}
-			const title = computeTitle(path, outLinks, inLinks, app) ?? file.basename;
-			this.createNoteItem(ul, file, title, false);
-		}
+		const entries: { path: string; isCycle: boolean; chainSize: number }[] = [];
+		for (const path of rootNodes)  entries.push({ path, isCycle: false, chainSize: chainSize(path, outLinks) });
+		for (const path of cycleRoots) entries.push({ path, isCycle: true,  chainSize: chainSize(path, outLinks) });
+		entries.sort((a, b) => b.chainSize - a.chainSize);
 
-		for (const path of cycleNodes) {
+		for (const { path, isCycle } of entries) {
 			const file = app.vault.getAbstractFileByPath(path);
 			if (!(file instanceof TFile)) {
 				console.warn(LOG_PREFIX, `Expected a TFile at path "${path}" but got none.`);
 				continue;
 			}
 			const title = computeTitle(path, outLinks, inLinks, app) ?? file.basename;
-			this.createNoteItem(ul, file, title, true);
+			this.createNoteItem(ul, file, title, isCycle);
 		}
 	}
 
@@ -343,22 +338,22 @@ class ThreadView extends ItemView {
 
 		const { outLinks } = buildLinkMaps(this.pluginApp);
 
-		// BFS to collect all nodes in the subtree
-		const subgraph = new Set<string>([this.rootPath]);
+		// BFS to collect all notes in the chain
+		const chain = new Set<string>([this.rootPath]);
 		const queue = [this.rootPath];
 		while (queue.length > 0) {
-			const node = queue.shift()!;
-			for (const neighbor of outLinks.get(node) ?? []) {
-				if (!subgraph.has(neighbor)) {
-					subgraph.add(neighbor);
-					queue.push(neighbor);
+			const note = queue.shift()!;
+			for (const referenced of outLinks.get(note) ?? []) {
+				if (!chain.has(referenced)) {
+					chain.add(referenced);
+					queue.push(referenced);
 				}
 			}
 		}
 
 		// Resolve paths to TFiles and sort by creation time descending (newest first)
 		const files: TFile[] = [];
-		for (const path of subgraph) {
+		for (const path of chain) {
 			const file = this.pluginApp.vault.getAbstractFileByPath(path);
 			if (file instanceof TFile) {
 				files.push(file);
@@ -459,10 +454,12 @@ function buildLinkMaps(app: App): LinkMaps {
 }
 
 /**
- * Builds the vault link graph and finds root nodes using Kosaraju's SCC algorithm:
- * - True roots: nodes with no incoming edges (shown normally)
- * - Cycle roots: multi-node SCCs with no external parents
- *   (one representative per cycle, shown in red)
+ * Builds the reference graph and identifies roots of maximum inclusion chains
+ * using Kosaraju's SCC algorithm. A maximum inclusion chain is a chain not
+ * referenced by any note outside of it.
+ * - Single-note SCC with no external references → root note (shown normally)
+ * - Multi-note SCC with no external references → cyclic chain; one
+ *   alphabetically-first representative is returned as the cycle root (shown in red)
  */
 function computeGraph(app: App): GraphData {
 	const { outLinks, inLinks } = buildLinkMaps(app);
@@ -531,7 +528,7 @@ function computeGraph(app: App): GraphData {
 	}
 
 	const rootNodes: string[] = [];
-	const cycleNodes: string[] = [];
+	const cycleRoots: string[] = [];
 
 	for (const [id, nodes] of sccs) {
 		if (sccHasExternalParent.has(id)) continue;
@@ -540,14 +537,14 @@ function computeGraph(app: App): GraphData {
 			rootNodes.push(nodes[0]);
 		} else {
 			nodes.sort((a, b) => basename(a).localeCompare(basename(b)));
-			cycleNodes.push(nodes[0]);
+			cycleRoots.push(nodes[0]);
 		}
 	}
 
 	rootNodes.sort((a, b) => basename(a).localeCompare(basename(b)));
-	cycleNodes.sort((a, b) => basename(a).localeCompare(basename(b)));
+	cycleRoots.sort((a, b) => basename(a).localeCompare(basename(b)));
 
-	return { rootNodes, cycleNodes, outLinks, inLinks };
+	return { rootNodes, cycleRoots, outLinks, inLinks };
 }
 
 // ---------------------------------------------------------------------------
@@ -555,18 +552,18 @@ function computeGraph(app: App): GraphData {
 // ---------------------------------------------------------------------------
 
 /**
- * Compute the display title for a root node.
+ * Compute the display title for the root of a maximum inclusion chain.
  *
  * Algorithm:
- * 1. Collect all nodes reachable from `rootPath` (BFS).
- * 2. For each reachable node, read its `thread` property from frontmatter.
- * 3. A thread value A (carried by node X) is eliminated if any node Y in the
- *    subgraph that has a *different* thread value links directly to X.
- *    (Y's thread "overrides" X's thread, so A is not a root-level thread.)
- * 4. Surviving thread values are candidates for the title:
+ * 1. Collect all notes in the chain via BFS from `rootPath`.
+ * 2. For each note in the chain, read its `chain` property from frontmatter.
+ * 3. A chain value A (carried by note X) is eliminated if any note Y in the
+ *    chain that has a *different* chain value references X directly.
+ *    (Y's chain value "overrides" X's, so A is not a root-level chain value.)
+ * 4. Surviving chain values are candidates for the title:
  *    - 0 candidates → use the note's basename (caller falls back)
- *    - 1 candidate  → use that thread value
- *    - 2+ candidates → "thread collision: [A, B, ...]"
+ *    - 1 candidate  → use that chain value
+ *    - 2+ candidates → "chain collision: [A, B, ...]"
  */
 function computeTitle(
 	rootPath: string,
@@ -575,36 +572,54 @@ function computeTitle(
 	app: App
 ): string | null {
 	try {
-		// BFS to collect all reachable nodes (including root itself)
-		const subgraph = new Set<string>([rootPath]);
+		// BFS to collect all notes in the chain (including root itself)
+		const chain = new Set<string>([rootPath]);
 		const queue = [rootPath];
 		while (queue.length > 0) {
-			const node = queue.shift()!;
-			for (const neighbor of outLinks.get(node) ?? []) {
-				if (!subgraph.has(neighbor)) {
-					subgraph.add(neighbor);
-					queue.push(neighbor);
+			const note = queue.shift()!;
+			for (const referenced of outLinks.get(note) ?? []) {
+				if (!chain.has(referenced)) {
+					chain.add(referenced);
+					queue.push(referenced);
 				}
 			}
 		}
 
-		// Collect thread values per node within the subgraph
-		const nodeThreads = new Map<string, string[]>();
-		for (const path of subgraph) {
-			const cache = app.metadataCache.getCache(path);
-			const threads = normalizeThread(cache?.frontmatter?.["thread"]);
-			if (threads.length > 0) nodeThreads.set(path, threads);
+		// For each tag, find the newest note in the vault that carries it.
+		// That note is treated as if it also has chain="#tag".
+		const tagNewest = new Map<string, string>(); // tag → path of newest note
+		for (const file of app.vault.getMarkdownFiles()) {
+			const cache = app.metadataCache.getCache(file.path);
+			if (!cache) continue;
+			for (const tag of getAllTags(cache) ?? []) {
+				const currentPath = tagNewest.get(tag);
+				const currentFile = currentPath ? app.vault.getAbstractFileByPath(currentPath) : null;
+				const currentCtime = currentFile instanceof TFile ? currentFile.stat.ctime : -Infinity;
+				if (file.stat.ctime > currentCtime) tagNewest.set(tag, file.path);
+			}
 		}
 
-		// Eliminate thread values: thread A (from node X) is eliminated when some
-		// node Y in the subgraph has a thread *different* from A and Y → X.
+		// Collect chain values per note within the chain.
+		// Implicit chain values are added for tags where this note is the vault-newest.
+		const noteChains = new Map<string, string[]>();
+		for (const path of chain) {
+			const cache = app.metadataCache.getCache(path);
+			const values = normalizeChain(cache?.frontmatter?.["chain"]);
+			for (const [tag, newestPath] of tagNewest) {
+				if (newestPath === path) values.push(tag);
+			}
+			if (values.length > 0) noteChains.set(path, values);
+		}
+
+		// Eliminate chain values: value A (from note X) is eliminated when some
+		// note Y in the chain has a *different* chain value and Y → X.
 		const eliminated = new Set<string>();
-		for (const [xPath, xThreads] of nodeThreads) {
+		for (const [xPath, xValues] of noteChains) {
 			for (const yPath of inLinks.get(xPath) ?? []) {
-				if (!subgraph.has(yPath)) continue;
-				const yThreads = nodeThreads.get(yPath);
-				if (!yThreads) continue;
-				const overlaps = yThreads.some((t) => xThreads.includes(t));
+				if (!chain.has(yPath)) continue;
+				const yValues = noteChains.get(yPath);
+				if (!yValues) continue;
+				const overlaps = yValues.some((v) => xValues.includes(v));
 				if (!overlaps) {
 					eliminated.add(xPath);
 					break;
@@ -612,21 +627,36 @@ function computeTitle(
 			}
 		}
 
-		// Surviving thread values are the candidates
+		// Surviving chain values are the candidates
 		const candidates = new Set<string>();
-		for (const [path, threads] of nodeThreads) {
+		for (const [path, values] of noteChains) {
 			if (!eliminated.has(path)) {
-				for (const t of threads) candidates.add(t);
+				for (const v of values) candidates.add(v);
 			}
 		}
 
 		if (candidates.size === 0) return null;
 		if (candidates.size === 1) return [...candidates][0];
-		return `thread collision: [${[...candidates].sort().join(", ")}]`;
+		return `chain collision: [${[...candidates].sort().join(", ")}]`;
 	} catch (e) {
 		console.error(LOG_PREFIX, `Unexpected error computing title for "${rootPath}":`, e);
 		return null;
 	}
+}
+
+function chainSize(rootPath: string, outLinks: Map<string, Set<string>>): number {
+	const visited = new Set<string>([rootPath]);
+	const queue = [rootPath];
+	while (queue.length > 0) {
+		const node = queue.shift()!;
+		for (const neighbor of outLinks.get(node) ?? []) {
+			if (!visited.has(neighbor)) {
+				visited.add(neighbor);
+				queue.push(neighbor);
+			}
+		}
+	}
+	return visited.size;
 }
 
 function basename(path: string): string {
