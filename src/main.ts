@@ -2,6 +2,7 @@ import {
 	App,
 	Editor,
 	FuzzySuggestModal,
+	getAllTags,
 	ItemView,
 	MarkdownRenderer,
 	Plugin,
@@ -13,24 +14,7 @@ import {
 const VIEW_TYPE_ROOT_NOTES = "root-notes-view";
 const VIEW_TYPE_THREAD = "thread-view";
 
-// Minimal Dataview API surface we use
-interface DataviewApi {
-	page(path: string): Record<string, unknown> | undefined;
-}
-
 const LOG_PREFIX = "[root-notes-view]";
-
-function getDataviewApi(app: App): DataviewApi | null {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const api = (app as any).plugins?.plugins?.["dataview"]?.api ?? null;
-	if (!api) {
-		console.warn(
-			LOG_PREFIX,
-			"Dataview plugin not found or not loaded. Thread-based titles will be unavailable."
-		);
-	}
-	return api;
-}
 
 function normalizeThread(val: unknown): string[] {
 	if (val === null || val === undefined) return [];
@@ -115,16 +99,6 @@ export default class RootNotesPlugin extends Plugin {
 			})
 		);
 
-		// Rebuild titles when Dataview finishes loading/indexing.
-		// This covers the case where Dataview is enabled after this plugin.
-		this.registerEvent(
-			// @ts-expect-error — dataview:index-ready is not in Obsidian's type definitions
-			this.app.workspace.on("dataview:index-ready", () => {
-				this.rebuildTitleMap();
-				this.refreshRootNotesView();
-			})
-		);
-
 		// Structural changes not covered by metadataCache events
 		this.registerEvent(this.app.vault.on("delete", () => this.rebuildTitleMap()));
 		this.registerEvent(this.app.vault.on("rename", () => this.rebuildTitleMap()));
@@ -142,7 +116,6 @@ export default class RootNotesPlugin extends Plugin {
 
 	rebuildTitleMap() {
 		try {
-			const dv = getDataviewApi(this.app);
 			const { rootNodes, cycleNodes, outLinks, inLinks } = computeGraph(this.app);
 
 			this.titleMap.clear();
@@ -153,7 +126,7 @@ export default class RootNotesPlugin extends Plugin {
 					console.warn(LOG_PREFIX, `Expected a TFile at path "${path}" but got none.`);
 					continue;
 				}
-				const title = computeTitle(path, outLinks, inLinks, dv) ?? file.basename;
+				const title = computeTitle(path, outLinks, inLinks, this.app) ?? file.basename;
 				this.titleMap.set(title, path);
 			}
 		} catch (e) {
@@ -262,7 +235,6 @@ class RootNotesView extends ItemView {
 		}
 
 		const { rootNodes, cycleNodes, outLinks, inLinks } = graphData;
-		const dv = getDataviewApi(app);
 
 		if (rootNodes.length === 0 && cycleNodes.length === 0) {
 			container.createEl("p", { text: "No root notes found.", cls: "root-notes-empty" });
@@ -277,7 +249,7 @@ class RootNotesView extends ItemView {
 				console.warn(LOG_PREFIX, `Expected a TFile at path "${path}" but got none.`);
 				continue;
 			}
-			const title = computeTitle(path, outLinks, inLinks, dv) ?? file.basename;
+			const title = computeTitle(path, outLinks, inLinks, app) ?? file.basename;
 			this.createNoteItem(ul, file, title, false);
 		}
 
@@ -287,7 +259,7 @@ class RootNotesView extends ItemView {
 				console.warn(LOG_PREFIX, `Expected a TFile at path "${path}" but got none.`);
 				continue;
 			}
-			const title = computeTitle(path, outLinks, inLinks, dv) ?? file.basename;
+			const title = computeTitle(path, outLinks, inLinks, app) ?? file.basename;
 			this.createNoteItem(ul, file, title, true);
 		}
 	}
@@ -449,8 +421,37 @@ function buildLinkMaps(app: App): LinkMaps {
 		if (!outLinks.has(sourcePath)) continue;
 		for (const targetPath of Object.keys(links)) {
 			if (!outLinks.has(targetPath)) continue;
+			if (targetPath === sourcePath) continue; // ignore self-links
 			outLinks.get(sourcePath)!.add(targetPath);
 			inLinks.get(targetPath)!.add(sourcePath);
+		}
+	}
+
+	// Among notes sharing a tag, a newer note references all older notes with that tag.
+	const tagToFiles = new Map<string, TFile[]>();
+	for (const file of allFiles) {
+		const cache = app.metadataCache.getCache(file.path);
+		if (!cache) continue;
+		for (const tag of getAllTags(cache) ?? []) {
+			if (!tagToFiles.has(tag)) tagToFiles.set(tag, []);
+			tagToFiles.get(tag)!.push(file);
+		}
+	}
+
+	for (const files of tagToFiles.values()) {
+		if (files.length < 2) continue;
+		for (let i = 0; i < files.length; i++) {
+			for (let j = i + 1; j < files.length; j++) {
+				const a = files[i], b = files[j];
+				if (a.stat.ctime > b.stat.ctime) {
+					outLinks.get(a.path)?.add(b.path);
+					inLinks.get(b.path)?.add(a.path);
+				} else if (b.stat.ctime > a.stat.ctime) {
+					outLinks.get(b.path)?.add(a.path);
+					inLinks.get(a.path)?.add(b.path);
+				}
+				// equal ctime: no edge (order is ambiguous)
+			}
 		}
 	}
 
@@ -460,7 +461,7 @@ function buildLinkMaps(app: App): LinkMaps {
 /**
  * Builds the vault link graph and finds root nodes using Kosaraju's SCC algorithm:
  * - True roots: nodes with no incoming edges (shown normally)
- * - Cycle roots: SCCs with no external parents, size > 1 or with self-loops
+ * - Cycle roots: multi-node SCCs with no external parents
  *   (one representative per cycle, shown in red)
  */
 function computeGraph(app: App): GraphData {
@@ -536,13 +537,7 @@ function computeGraph(app: App): GraphData {
 		if (sccHasExternalParent.has(id)) continue;
 
 		if (nodes.length === 1) {
-			const node = nodes[0];
-			const hasSelfLoop = outLinks.get(node)?.has(node) ?? false;
-			if (hasSelfLoop) {
-				cycleNodes.push(node);
-			} else {
-				rootNodes.push(node);
-			}
+			rootNodes.push(nodes[0]);
 		} else {
 			nodes.sort((a, b) => basename(a).localeCompare(basename(b)));
 			cycleNodes.push(nodes[0]);
@@ -564,7 +559,7 @@ function computeGraph(app: App): GraphData {
  *
  * Algorithm:
  * 1. Collect all nodes reachable from `rootPath` (BFS).
- * 2. For each reachable node, read its `thread` Dataview field.
+ * 2. For each reachable node, read its `thread` property from frontmatter.
  * 3. A thread value A (carried by node X) is eliminated if any node Y in the
  *    subgraph that has a *different* thread value links directly to X.
  *    (Y's thread "overrides" X's thread, so A is not a root-level thread.)
@@ -577,10 +572,8 @@ function computeTitle(
 	rootPath: string,
 	outLinks: Map<string, Set<string>>,
 	inLinks: Map<string, Set<string>>,
-	dv: DataviewApi | null
+	app: App
 ): string | null {
-	if (!dv) return null;
-
 	try {
 		// BFS to collect all reachable nodes (including root itself)
 		const subgraph = new Set<string>([rootPath]);
@@ -598,14 +591,8 @@ function computeTitle(
 		// Collect thread values per node within the subgraph
 		const nodeThreads = new Map<string, string[]>();
 		for (const path of subgraph) {
-			let page: Record<string, unknown> | undefined;
-			try {
-				page = dv.page(path);
-			} catch (e) {
-				console.error(LOG_PREFIX, `Dataview failed to read page "${path}":`, e);
-				continue;
-			}
-			const threads = normalizeThread(page?.["thread"]);
+			const cache = app.metadataCache.getCache(path);
+			const threads = normalizeThread(cache?.frontmatter?.["thread"]);
 			if (threads.length > 0) nodeThreads.set(path, threads);
 		}
 

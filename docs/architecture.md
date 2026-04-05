@@ -23,7 +23,6 @@ Owns all lifecycle, event registration, and cross-component state.
 **Events that trigger index rebuild:**
 - `metadataCache.on("resolved")` — fires after all pending file metadata is processed; covers creates, edits.
 - `vault.on("delete")` and `vault.on("rename")` — structural changes not guaranteed to fire `resolved`.
-- `workspace.on("dataview:index-ready")` — fires when the Dataview plugin finishes loading; enables thread-based titles if Dataview was not yet active at startup.
 - `workspace.onLayoutReady` — initial build at startup.
 
 ---
@@ -36,8 +35,7 @@ Opened in the right leaf on startup and via the "Open Root Notes View" command.
 
 **Render cycle** (called by `refreshRootNotesView()` and `onOpen`):
 1. Calls `computeGraph(app)` to get `rootNodes`, `cycleNodes`, `outLinks`, `inLinks`.
-2. Calls `getDataviewApi(app)` for the Dataview handle (may be null).
-3. For each node path, calls `computeTitle(...)` → falls back to `file.basename`.
+2. For each node path, calls `computeTitle(...)` → falls back to `file.basename`.
 4. Renders an `<ul>` where each `<li>` contains:
    - A clickable `<a>` that opens the note in the current leaf.
    - A `↺` span for cycle nodes.
@@ -75,7 +73,7 @@ The view is read-only by design (no editor, no CodeMirror). Tab title is `Thread
 
 Populated exclusively by `plugin.rebuildTitleMap()`, which:
 1. Calls `computeGraph(app)` to get all root and cycle node paths.
-2. For each path, resolves to a `TFile` and calls `computeTitle(...)` (Dataview-aware).
+2. For each path, resolves to a `TFile` and calls `computeTitle(...)`.
 3. Falls back to `file.basename` when `computeTitle` returns null.
 
 Consumed by:
@@ -106,15 +104,17 @@ Iterates `app.vault.getMarkdownFiles()` and `app.metadataCache.resolvedLinks` to
 - `outLinks: Map<path, Set<path>>` — forward edges (A links to B).
 - `inLinks: Map<path, Set<path>>` — reverse edges (B is linked by A).
 
-Only markdown files are included; non-markdown targets in `resolvedLinks` are skipped.
+Only markdown files are included; non-markdown targets in `resolvedLinks` are skipped. Self-links are ignored.
+
+After processing explicit links, tag-based directed edges are added. Note A references note B via a shared tag when both carry the same tag and A was created strictly later than B (`stat.ctime`). Notes with equal creation times are not connected by a tag edge. This uses `getAllTags` which combines frontmatter and inline tags.
 
 Used by both `computeGraph` and `ThreadView`.
 
 ### `computeGraph(app): GraphData`
 
 Runs **Kosaraju's SCC algorithm** (iterative, no recursion) on `outLinks`/`inLinks` to find source SCCs — SCCs with no incoming edges from other SCCs:
-- Single-node SCC, no self-loop → **root note** (shown normally in sidebar).
-- Single-node SCC with self-loop, or multi-node SCC → **cycle node** (shown in red with ↺). One alphabetically-first representative is picked per cycle.
+- Single-node SCC → **root note** (shown normally in sidebar).
+- Multi-node SCC → **cycle node** (shown in red with ↺). One alphabetically-first representative is picked per cycle.
 
 Returns `rootNodes[]`, `cycleNodes[]`, `outLinks`, `inLinks`.
 
@@ -122,27 +122,27 @@ Returns `rootNodes[]`, `cycleNodes[]`, `outLinks`, `inLinks`.
 
 ## Title Computation
 
-### `computeTitle(rootPath, outLinks, inLinks, dv): string | null`
+### `computeTitle(rootPath, outLinks, inLinks, app): string | null`
 
-Computes the display title of a root node using Dataview's `thread` frontmatter field.
+Computes the display title of a root node using the `thread` property from each note's frontmatter (read via `app.metadataCache.getCache(path)?.frontmatter`).
 
 **Algorithm:**
 1. BFS from `rootPath` over `outLinks` → `subgraph: Set<path>`.
-2. For each node in the subgraph, read `dv.page(path)?.thread` and normalise to `string[]`.
+2. For each node in the subgraph, read `frontmatter.thread` and normalise to `string[]`.
 3. **Elimination rule:** a node X's thread value A is eliminated if any node Y in the subgraph with a *non-overlapping* thread value links directly to X (Y → X). This encodes "Y's thread overrides X's thread".
 4. Collect surviving thread values as candidates:
    - 0 candidates → return `null` (caller uses `file.basename`).
    - 1 candidate → return it.
    - 2+ candidates → return `"thread collision: [A, B, ...]"`.
 
-Returns `null` when Dataview is unavailable; callers always fall back to `file.basename`.
+No external plugin dependency — uses Obsidian's native metadata cache directly.
 
 ---
 
 ## Error Handling
 
 All unexpected errors are logged to the browser console with the `[root-notes-view]` prefix.
-- `console.warn` — expected-but-notable cases (Dataview missing, unexpected file type).
+- `console.warn` — expected-but-notable cases (unexpected file type).
 - `console.error` — unexpected failures (graph computation, file read, markdown render).
 - `render()` in the sidebar shows an inline error message if `computeGraph` throws.
 - `ThreadView.render()` shows a per-section error message if a file read or render fails, and continues with remaining notes.

@@ -4,8 +4,8 @@ plugin_id := "root-notes-view"
 
 # Build the plugin and install it into the Obsidian vault
 update vault:
-    build
-    install {{vault}}
+    just build
+    just install {{vault}}
 
 # Compile TypeScript to main.js
 build:

@@ -5,6 +5,7 @@
 }
 
 .root-notes-item {
+    position: relative;
     display: flex;
     align-items: center;
     padding: 4px 8px;
@@ -17,9 +18,13 @@
 }
 
 .root-notes-thread-btn {
-    display: none;
-    flex-shrink: 0;
-    margin-left: auto;
+    visibility: hidden;
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
     padding: 2px 4px;
     background: none;
     border: none;
@@ -35,7 +40,7 @@
 }
 
 .root-notes-item:hover .root-notes-thread-btn {
-    display: flex;
+    visibility: visible;
 }
 
 .root-notes-link {
