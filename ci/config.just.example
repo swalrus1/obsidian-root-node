@@ -1,4 +1,0 @@
-# This is an example config. Define your own config by 'cp config.just.example config.just'
-
-# Path to your Obsidian vault
-vault := "~/Obsidian"
