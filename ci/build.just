@@ -1,4 +1,4 @@
-import 'config.just'
+import? 'config.just'
 
 plugin_id := "root-notes-view"
 plugin_dir := vault / ".obsidian/plugins" / plugin_id

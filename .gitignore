@@ -16,4 +16,4 @@ CLAUDE.md
 data.json
 
 # Local dev config
-ci/my-config.just
+ci/config.just
