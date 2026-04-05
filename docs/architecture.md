@@ -124,16 +124,16 @@ Returns `rootNodes[]`, `cycleNodes[]`, `outLinks`, `inLinks`.
 
 ### `computeTitle(rootPath, outLinks, inLinks, app): string | null`
 
-Computes the display title of the root of a maximum inclusion chain using the `chain` property from each note's frontmatter (read via `app.metadataCache.getCache(path)?.frontmatter`).
+Computes the display title of the root of a maximum inclusion chain using the `chain` frontmatter property and tags from notes in the chain.
 
 **Algorithm:**
 1. BFS from `rootPath` over `outLinks` → `chain: Set<path>`.
-2. For each note in the chain, read `frontmatter.chain` and normalise to `string[]`.
-3. **Elimination rule:** a note X's chain value A is eliminated if any note Y in the chain with a *non-overlapping* chain value references X directly (Y → X). This encodes "Y's chain value overrides X's".
-4. Collect surviving chain values as candidates:
-   - 0 candidates → return `null` (caller uses `file.basename`).
-   - 1 candidate → return it.
-   - 2+ candidates → return `"chain collision: [A, B, ...]"`.
+2. A note is a **candidate** if it has a `chain` frontmatter property or any tag.
+3. **Elimination rule:** candidate X is eliminated if any other candidate Y can reach X through the chain graph (directly or through intermediate notes).
+4. Collect values (chain property values + tags) from surviving candidate notes:
+   - 0 surviving candidates → return `null` (caller uses `file.basename`).
+   - 1 surviving candidate → return its value.
+   - 2+ surviving candidates → return `"chain collision: [A, B, ...]"`.
 
 No external plugin dependency — uses Obsidian's native metadata cache directly.
 

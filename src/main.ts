@@ -16,7 +16,7 @@ const VIEW_TYPE_THREAD = "thread-view";
 
 const LOG_PREFIX = "[root-notes-view]";
 
-function normalizeChain(val: unknown): string[] {
+export function normalizeChain(val: unknown): string[] {
 	if (val === null || val === undefined) return [];
 	if (Array.isArray(val)) return val.map((v) => String(v));
 	return [String(val)];
@@ -400,7 +400,7 @@ class ThreadView extends ItemView {
 // Graph computation
 // ---------------------------------------------------------------------------
 
-function buildLinkMaps(app: App): LinkMaps {
+export function buildLinkMaps(app: App): LinkMaps {
 	const resolvedLinks = app.metadataCache.resolvedLinks;
 	const allFiles = app.vault.getMarkdownFiles();
 
@@ -435,18 +435,15 @@ function buildLinkMaps(app: App): LinkMaps {
 
 	for (const files of tagToFiles.values()) {
 		if (files.length < 2) continue;
-		for (let i = 0; i < files.length; i++) {
-			for (let j = i + 1; j < files.length; j++) {
-				const a = files[i], b = files[j];
-				if (a.stat.ctime > b.stat.ctime) {
-					outLinks.get(a.path)?.add(b.path);
-					inLinks.get(b.path)?.add(a.path);
-				} else if (b.stat.ctime > a.stat.ctime) {
-					outLinks.get(b.path)?.add(a.path);
-					inLinks.get(a.path)?.add(b.path);
-				}
-				// equal ctime: no edge (order is ambiguous)
-			}
+		// Sort descending by ctime (newest first), then add edges only between
+		// consecutive pairs. This chains newer → older transitively in O(T log T)
+		// instead of creating O(T²) pairwise edges.
+		files.sort((a, b) => b.stat.ctime - a.stat.ctime);
+		for (let i = 0; i < files.length - 1; i++) {
+			const a = files[i], b = files[i + 1];
+			if (a.stat.ctime === b.stat.ctime) continue; // equal ctime: no edge (order is ambiguous)
+			outLinks.get(a.path)?.add(b.path);
+			inLinks.get(b.path)?.add(a.path);
 		}
 	}
 
@@ -461,7 +458,7 @@ function buildLinkMaps(app: App): LinkMaps {
  * - Multi-note SCC with no external references → cyclic chain; one
  *   alphabetically-first representative is returned as the cycle root (shown in red)
  */
-function computeGraph(app: App): GraphData {
+export function computeGraph(app: App): GraphData {
 	const { outLinks, inLinks } = buildLinkMaps(app);
 	const allNodes = Array.from(outLinks.keys());
 
@@ -556,16 +553,15 @@ function computeGraph(app: App): GraphData {
  *
  * Algorithm:
  * 1. Collect all notes in the chain via BFS from `rootPath`.
- * 2. For each note in the chain, read its `chain` property from frontmatter.
- * 3. A chain value A (carried by note X) is eliminated if any note Y in the
- *    chain that has a *different* chain value references X directly.
- *    (Y's chain value "overrides" X's, so A is not a root-level chain value.)
- * 4. Surviving chain values are candidates for the title:
- *    - 0 candidates → use the note's basename (caller falls back)
- *    - 1 candidate  → use that chain value
- *    - 2+ candidates → "chain collision: [A, B, ...]"
+ * 2. A note is a candidate if it has a `chain` frontmatter property or any tag.
+ * 3. A candidate X is eliminated if any other candidate Y can reach X through
+ *    the chain graph (directly or through intermediate notes).
+ * 4. Surviving candidate notes contribute their values (chain values + tags):
+ *    - 0 surviving candidates → use the note's basename (caller falls back)
+ *    - 1 surviving candidate  → use that candidate's value
+ *    - 2+ surviving candidates → "chain collision: [A, B, ...]"
  */
-function computeTitle(
+export function computeTitle(
 	rootPath: string,
 	outLinks: Map<string, Set<string>>,
 	inLinks: Map<string, Set<string>>,
@@ -585,49 +581,39 @@ function computeTitle(
 			}
 		}
 
-		// For each tag, find the newest note in the vault that carries it.
-		// That note is treated as if it also has chain="#tag".
-		const tagNewest = new Map<string, string>(); // tag → path of newest note
-		for (const file of app.vault.getMarkdownFiles()) {
-			const cache = app.metadataCache.getCache(file.path);
-			if (!cache) continue;
-			for (const tag of getAllTags(cache) ?? []) {
-				const currentPath = tagNewest.get(tag);
-				const currentFile = currentPath ? app.vault.getAbstractFileByPath(currentPath) : null;
-				const currentCtime = currentFile instanceof TFile ? currentFile.stat.ctime : -Infinity;
-				if (file.stat.ctime > currentCtime) tagNewest.set(tag, file.path);
-			}
-		}
-
 		// Collect chain values per note within the chain.
-		// Implicit chain values are added for tags where this note is the vault-newest.
+		// A note is a candidate if it has a chain property or any tag.
 		const noteChains = new Map<string, string[]>();
 		for (const path of chain) {
 			const cache = app.metadataCache.getCache(path);
 			const values = normalizeChain(cache?.frontmatter?.["chain"]);
-			for (const [tag, newestPath] of tagNewest) {
-				if (newestPath === path) values.push(tag);
+			for (const tag of getAllTags(cache) ?? []) {
+				values.push(tag);
 			}
 			if (values.length > 0) noteChains.set(path, values);
 		}
 
-		// Eliminate chain values: value A (from note X) is eliminated when some
-		// note Y in the chain has a *different* chain value and Y → X.
+		// Eliminate a candidate X if any other candidate Y can reach X
+		// through the chain graph (directly or through intermediate notes).
+		const candidatePaths = new Set(noteChains.keys());
 		const eliminated = new Set<string>();
-		for (const [xPath, xValues] of noteChains) {
-			for (const yPath of inLinks.get(xPath) ?? []) {
-				if (!chain.has(yPath)) continue;
-				const yValues = noteChains.get(yPath);
-				if (!yValues) continue;
-				const overlaps = yValues.some((v) => xValues.includes(v));
-				if (!overlaps) {
-					eliminated.add(xPath);
-					break;
+		for (const startPath of candidatePaths) {
+			const visited = new Set<string>([startPath]);
+			const bfsQueue = [startPath];
+			while (bfsQueue.length > 0) {
+				const current = bfsQueue.shift()!;
+				for (const next of outLinks.get(current) ?? []) {
+					if (!chain.has(next) || visited.has(next)) continue;
+					visited.add(next);
+					bfsQueue.push(next);
+					if (candidatePaths.has(next)) {
+						eliminated.add(next);
+					}
 				}
 			}
 		}
 
-		// Surviving chain values are the candidates
+		// Surviving candidate notes contribute their values
 		const candidates = new Set<string>();
 		for (const [path, values] of noteChains) {
 			if (!eliminated.has(path)) {
@@ -644,7 +630,7 @@ function computeTitle(
 	}
 }
 
-function chainSize(rootPath: string, outLinks: Map<string, Set<string>>): number {
+export function chainSize(rootPath: string, outLinks: Map<string, Set<string>>): number {
 	const visited = new Set<string>([rootPath]);
 	const queue = [rootPath];
 	while (queue.length > 0) {
@@ -659,6 +645,6 @@ function chainSize(rootPath: string, outLinks: Map<string, Set<string>>): number
 	return visited.size;
 }
 
-function basename(path: string): string {
+export function basename(path: string): string {
 	return path.split("/").pop()?.replace(/\.md$/, "") ?? path;
 }

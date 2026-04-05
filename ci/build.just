@@ -21,6 +21,10 @@ install vault:
 deps:
     npm install
 
+# Run unit tests
+test:
+    npm test
+
 # Watch mode for development
 dev:
     npm run dev
