@@ -84,7 +84,7 @@ export class ThreadView extends ItemView {
 
 		// Branch: append a pseudo-node linking to the chain it joins into.
 		if (chain && chain.parentRoot !== null) {
-			this.renderContinuation(container, chain.parentRoot, outLinks);
+			this.renderContinuation(container, chain.parentRoot, chain.joinNode, outLinks);
 		}
 	}
 
@@ -115,7 +115,12 @@ export class ThreadView extends ItemView {
 		}
 	}
 
-	private renderContinuation(container: HTMLElement, parentRoot: string, outLinks: Map<string, Set<string>>) {
+	private renderContinuation(
+		container: HTMLElement,
+		parentRoot: string,
+		joinNode: string | null,
+		outLinks: Map<string, Set<string>>
+	) {
 		const parentTitle = computeTitle(parentRoot, outLinks, outLinks, this.app) ?? basename(parentRoot);
 		const section = container.createEl("div", { cls: "thread-section thread-continuation" });
 		const heading = section.createEl("h2", { cls: "thread-note-title" });
@@ -127,5 +132,19 @@ export class ThreadView extends ItemView {
 			e.preventDefault();
 			this.setState({ path: parentRoot }, { history: true } as ViewStateResult);
 		});
+
+		// Link straight to the next note (the join node this branch attaches to).
+		const joinFile = joinNode ? this.app.vault.getAbstractFileByPath(joinNode) : null;
+		if (joinFile instanceof TFile) {
+			const nextHeading = section.createEl("h2", { cls: "thread-note-title" });
+			const nextLink = nextHeading.createEl("a", {
+				text: `Next note: ${joinFile.basename}`,
+				cls: "thread-note-title-link",
+			});
+			nextLink.addEventListener("click", (e) => {
+				e.preventDefault();
+				this.app.workspace.getLeaf(false).openFile(joinFile);
+			});
+		}
 	}
 }

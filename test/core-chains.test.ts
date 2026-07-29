@@ -28,6 +28,7 @@ describe("core/computeChains", () => {
 		const chains = computeChains(["a.md"], [], out);
 		expect(chains).toHaveLength(1);
 		expect(chains[0].parentRoot).toBeNull();
+		expect(chains[0].joinNode).toBeNull();
 		expect(chains[0].nodes.sort()).toEqual(["a.md", "b.md", "c.md"]);
 	});
 
@@ -47,6 +48,7 @@ describe("core/computeChains", () => {
 
 		const branch = chains.get("b.md")!;
 		expect(branch.parentRoot).toBe("s.md");
+		expect(branch.joinNode).toBe("j.md"); // next note: closest spine node
 		expect(branch.nodes).toEqual(["b.md"]); // only its unique suffix
 
 		// invariant: every node owned exactly once
@@ -65,6 +67,7 @@ describe("core/computeChains", () => {
 		expect(chains.get("a.md")!.parentRoot).toBeNull();
 		expect(chains.get("a.md")!.nodes.sort()).toEqual(["a.md", "t.md"]);
 		expect(chains.get("z.md")!.parentRoot).toBe("a.md");
+		expect(chains.get("z.md")!.joinNode).toBe("t.md");
 		expect(chains.get("z.md")!.nodes).toEqual(["z.md"]);
 	});
 
@@ -87,9 +90,11 @@ describe("core/computeChains", () => {
 		expect(chains.get("s.md")!.nodes.sort()).toEqual(["j.md", "k.md", "s.md", "s2.md", "s3.md"]);
 
 		expect(chains.get("b.md")!.parentRoot).toBe("s.md");
+		expect(chains.get("b.md")!.joinNode).toBe("j.md");
 		expect(chains.get("b.md")!.nodes.sort()).toEqual(["b.md", "b2.md"]);
 
 		expect(chains.get("c.md")!.parentRoot).toBe("b.md");
+		expect(chains.get("c.md")!.joinNode).toBe("b2.md"); // joins the branch, not the spine
 		expect(chains.get("c.md")!.nodes).toEqual(["c.md"]);
 	});
 

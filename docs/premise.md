@@ -28,8 +28,9 @@ not necessarily the spine.
 
 The side panel lists all spines and branches; a branch's name is prefixed with
 `[branch]`. The chain view of a spine shows its full chain; the chain view of a
-branch shows only the branch's own nodes plus a pseudo-node linking to the chain
-view of the chain it joins into.
+branch shows only the branch's own nodes plus a pseudo-node linking both to the
+chain view of the chain it joins into and directly to the next note (the note the
+branch attaches to).
 
 ## Core idea
 

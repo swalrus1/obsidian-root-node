@@ -140,7 +140,9 @@ Opened as a new tab via `plugin.openThreadView(file)` or the "Show thread view" 
    - The `h2` contains a clickable `<a>` that opens the note.
    - Reads file content with `vault.read(file)`.
    - Renders markdown with `MarkdownRenderer.render(app, content, el, sourcePath, this)`.
-5. **Branch only** (`renderContinuation`): appends a trailing `div.thread-section.thread-continuation` pseudo-node — a link "Continued in: `<parent title>`" that re-renders the view in place via `setState({ path: parentRoot })`. Because it navigates to the parent chain's root, nested branches chain up to their spine one hop at a time.
+5. **Branch only** (`renderContinuation`): appends a trailing `div.thread-section.thread-continuation` pseudo-node with two links:
+   - "Continued in: `<parent title>`" — re-renders the view in place via `setState({ path: parentRoot })`. Because it navigates to the parent chain's root, nested branches chain up to their spine one hop at a time.
+   - "Next note: `<join basename>`" — opens `chain.joinNode` (the note the branch attaches to) in the current leaf, matching the per-note title links. Omitted if `joinNode` doesn't resolve to a `TFile`.
 
 The view is read-only by design (no editor, no CodeMirror). Tab title is `Thread: <basename>`.
 
@@ -203,9 +205,11 @@ Returns `rootNodes[]`, `cycleNodes[]`, `outLinks`, `inLinks`.
 ### `computeChains(roots, cycleRoots, outLinks): Chain[]`
 
 Partitions all reachable nodes into spines and branches (see
-`docs/premise.md` for the model). `Chain = { root, nodes, parentRoot, isCycle }`;
+`docs/premise.md` for the model). `Chain = { root, nodes, parentRoot, joinNode, isCycle }`;
 `parentRoot === null` marks a spine, `parentRoot !== null` a branch (there is no
-separate `kind` field — it is derivable from `parentRoot`).
+separate `kind` field — it is derivable from `parentRoot`). `joinNode` is the
+branch's **next note**: the closest node to `root` owned by another chain (the
+note the branch attaches to); `null` for a spine.
 
 **Algorithm:**
 1. Precompute each root's reach size via `chainNotes`.
@@ -217,7 +221,8 @@ separate `kind` field — it is derivable from `parentRoot`).
      expanded.
    - An already-owned node is a **join point**: it (and everything past it, which
      is already owned — ownership is downward-closed) is not expanded. The first
-     join encountered in BFS order sets `parentRoot`.
+     join encountered in BFS order sets `parentRoot` (its owner) and `joinNode`
+     (the node itself).
 4. A chain that hit no join owns its entire reach and is a **spine**
    (`parentRoot === null`). A chain that hit a join owns only its unique suffix
    and is a **branch** whose parent is the immediate chain it joined.

@@ -16,6 +16,11 @@ export interface Chain {
 	nodes: string[];
 	/** Root of the parent chain a branch joins, or null for a spine. */
 	parentRoot: string | null;
+	/**
+	 * The join node: the closest node to `root` that is owned by another chain —
+	 * i.e. the next note after this branch's own nodes. Null for a spine.
+	 */
+	joinNode: string | null;
 	isCycle: boolean;
 }
 
@@ -49,6 +54,7 @@ export function computeChains(
 	for (const root of ordered) {
 		const owned: string[] = [];
 		let parentRoot: string | null = null;
+		let joinNode: string | null = null;
 
 		const queue = [root];
 		const seen = new Set<string>([root]);
@@ -58,8 +64,11 @@ export function computeChains(
 			if (existing !== undefined) {
 				// Already owned by a larger chain: this is a join point. Everything
 				// reachable past it is owned too, so stop expanding here. The first
-				// join encountered (BFS order) is the immediate parent.
-				if (parentRoot === null) parentRoot = existing;
+				// join encountered (BFS order) is the immediate parent + next note.
+				if (parentRoot === null) {
+					parentRoot = existing;
+					joinNode = node;
+				}
 				continue;
 			}
 			owner.set(node, root);
@@ -72,7 +81,7 @@ export function computeChains(
 			}
 		}
 
-		chains.push({ root, nodes: owned, parentRoot, isCycle: cycleSet.has(root) });
+		chains.push({ root, nodes: owned, parentRoot, joinNode, isCycle: cycleSet.has(root) });
 	}
 
 	return chains;
