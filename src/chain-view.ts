@@ -1,5 +1,6 @@
 import { ItemView, MarkdownRenderer, TFile, ViewStateResult, WorkspaceLeaf } from "obsidian";
-import { buildLinkMaps, basename } from "./graph";
+import { computeGraph, chainsFromGraph, computeTitle, basename } from "./graph";
+import { chainNotes } from "../core/graph";
 
 const LOG_PREFIX = "[note-chain]";
 
@@ -57,24 +58,17 @@ export class ThreadView extends ItemView {
 			return;
 		}
 
-		const { outLinks } = buildLinkMaps(this.app);
+		const graph = computeGraph(this.app);
+		const { outLinks } = graph;
 
-		// BFS to collect all notes in the chain
-		const chain = new Set<string>([this.rootPath]);
-		const queue = [this.rootPath];
-		while (queue.length > 0) {
-			const note = queue.shift()!;
-			for (const referenced of outLinks.get(note) ?? []) {
-				if (!chain.has(referenced)) {
-					chain.add(referenced);
-					queue.push(referenced);
-				}
-			}
-		}
+		// A branch shows only its own nodes; a spine (or a path that is not a
+		// chain root — fallback) shows everything reachable from it.
+		const chain = chainsFromGraph(graph).find((c) => c.root === this.rootPath);
+		const paths = chain && chain.parentRoot !== null ? chain.nodes : chainNotes(this.rootPath, outLinks);
 
 		// Resolve paths to TFiles and sort by creation time descending (newest first)
 		const files: TFile[] = [];
-		for (const path of chain) {
+		for (const path of paths) {
 			const file = this.app.vault.getAbstractFileByPath(path);
 			if (file instanceof TFile) {
 				files.push(file);
@@ -84,32 +78,54 @@ export class ThreadView extends ItemView {
 		}
 		files.sort((a, b) => b.stat.ctime - a.stat.ctime);
 
-		// Render each note's content
 		for (const file of files) {
-			const section = container.createEl("div", { cls: "thread-section" });
-			const heading = section.createEl("h2", { cls: "thread-note-title" });
-			const titleLink = heading.createEl("a", { text: file.basename, cls: "thread-note-title-link" });
-			titleLink.addEventListener("click", (e) => {
-				e.preventDefault();
-				this.app.workspace.getLeaf(false).openFile(file);
-			});
-
-			let content: string;
-			try {
-				content = await this.app.vault.read(file);
-			} catch (e) {
-				console.error(LOG_PREFIX, `Thread view: failed to read file "${file.path}":`, e);
-				section.createEl("p", { text: "Error reading note content.", cls: "root-notes-empty" });
-				continue;
-			}
-
-			const body = section.createEl("div", { cls: "thread-note-body" });
-			try {
-				await MarkdownRenderer.render(this.app, preprocessContent(content), body, file.path, this);
-			} catch (e) {
-				console.error(LOG_PREFIX, `Thread view: failed to render "${file.path}":`, e);
-				body.setText(content);
-			}
+			await this.renderNote(container, file);
 		}
+
+		// Branch: append a pseudo-node linking to the chain it joins into.
+		if (chain && chain.parentRoot !== null) {
+			this.renderContinuation(container, chain.parentRoot, outLinks);
+		}
+	}
+
+	private async renderNote(container: HTMLElement, file: TFile) {
+		const section = container.createEl("div", { cls: "thread-section" });
+		const heading = section.createEl("h2", { cls: "thread-note-title" });
+		const titleLink = heading.createEl("a", { text: file.basename, cls: "thread-note-title-link" });
+		titleLink.addEventListener("click", (e) => {
+			e.preventDefault();
+			this.app.workspace.getLeaf(false).openFile(file);
+		});
+
+		let content: string;
+		try {
+			content = await this.app.vault.read(file);
+		} catch (e) {
+			console.error(LOG_PREFIX, `Thread view: failed to read file "${file.path}":`, e);
+			section.createEl("p", { text: "Error reading note content.", cls: "root-notes-empty" });
+			return;
+		}
+
+		const body = section.createEl("div", { cls: "thread-note-body" });
+		try {
+			await MarkdownRenderer.render(this.app, preprocessContent(content), body, file.path, this);
+		} catch (e) {
+			console.error(LOG_PREFIX, `Thread view: failed to render "${file.path}":`, e);
+			body.setText(content);
+		}
+	}
+
+	private renderContinuation(container: HTMLElement, parentRoot: string, outLinks: Map<string, Set<string>>) {
+		const parentTitle = computeTitle(parentRoot, outLinks, outLinks, this.app) ?? basename(parentRoot);
+		const section = container.createEl("div", { cls: "thread-section thread-continuation" });
+		const heading = section.createEl("h2", { cls: "thread-note-title" });
+		const link = heading.createEl("a", {
+			text: `Continued in: ${parentTitle}`,
+			cls: "thread-note-title-link",
+		});
+		link.addEventListener("click", (e) => {
+			e.preventDefault();
+			this.setState({ path: parentRoot }, { history: true } as ViewStateResult);
+		});
 	}
 }

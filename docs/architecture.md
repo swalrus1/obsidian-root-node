@@ -7,6 +7,9 @@
   - `core/buildLinkMaps.ts` — pure `buildLinkMaps(filePaths, resolvedLinks)`.
   - `core/graph.ts` — `computeGraph`, `chainNotes` (BFS from a root over
     `outLinks`), `chainSize`, `basename`, `normalizeChain`.
+  - `core/chains.ts` — `computeChains(roots, cycleRoots, outLinks)` partitions
+    the graph into spines and branches (see "Spine / Branch Partition" below).
+    Exports the `Chain` interface.
   - `core/title.ts` — `computeTitle(rootPath, outLinks, getFrontmatter)`,
     parameterised over a frontmatter reader.
   - `core/types.ts` — `LinkMaps`, `GraphData`, `ResolvedLinks`,
@@ -17,7 +20,9 @@
     `app.vault.getMarkdownFiles()` + `app.metadataCache.resolvedLinks` and
     delegates; `computeTitle(...)` builds a frontmatter reader from
     `app.metadataCache.getCache(path)?.frontmatter` and delegates;
-    `resolveAndSortByCtime` stays here because it needs the Obsidian
+    `chainsFromGraph(graphData)` delegates to `core/chains.computeChains` (takes
+    an already-computed `GraphData` so callers can reuse one `computeGraph`
+    call); `resolveAndSortByCtime` stays here because it needs the Obsidian
     `TFile.stat.ctime` accessor.
 - `cli/` — standalone Node CLI bundled by `cli/esbuild.config.mjs` into
   `cli/dist/cli.js`. Loads a vault directory from disk (`cli/src/fs-vault.ts`),
@@ -104,7 +109,8 @@ The dynamic command-id lookup exists because Obsidian's core plugin command IDs 
 1. Calls `computeGraph(app)` to get `rootNodes`, `cycleNodes`, `outLinks`, `inLinks`.
 2. Resolves each path to a `TFile`; skips with a warn if not a `TFile`.
 3. Sorts entries by `file.stat.ctime` **descending** (newest root note first). The biggest-chain-first sort is intentionally not applied — surfacing recent activity is the product intent (chains become "disposable" with age).
-4. For each node path, calls `computeTitle(...)` → falls back to `file.basename`.
+4. Calls `chainsFromGraph(graphData)` to partition roots into spines/branches; each root whose `Chain.parentRoot !== null` is a branch.
+5. For each node path, calls `computeTitle(...)` → falls back to `file.basename`. Branch entries are prefixed with `[branch] `.
 5. Computes `isStale = (Date.now() - ctime) > STALE_THRESHOLD_MS` where `STALE_THRESHOLD_MS = 30 days`. Stale chains receive the `is-stale` class; `styles.css` fades them to `opacity: 0.5`. This is a deliberate visual de-emphasis, not a filter — stale chains remain clickable.
 6. Renders an `<ul>` where each `<li>` contains:
    - A clickable `<a>` that opens the note in the current leaf.
@@ -124,14 +130,17 @@ Opened as a new tab via `plugin.openThreadView(file)` or the "Show thread view" 
 **State:** `rootPath: string | null` — persisted via `getState()`/`setState()`, so the tab survives Obsidian restarts.
 
 **Render cycle** (async, called from `setState` and `onOpen`):
-1. Calls `buildLinkMaps(app)` to get `outLinks`.
-2. BFS from `rootPath` over `outLinks` to collect the full subtree (set of paths).
+1. Calls `computeGraph(app)` then `chainsFromGraph(...)` and finds the `Chain` whose `root === rootPath`.
+2. Selects the paths to render:
+   - **Branch** (`chain.parentRoot !== null`): only `chain.nodes` (its own suffix).
+   - **Spine, or `rootPath` is not a chain root (fallback)**: `chainNotes(rootPath, outLinks)` — the full reachable subtree (preserves the pre-partition behavior for any non-root path).
 3. Resolves each path to a `TFile`; sorts by `TFile.stat.ctime` descending (newest first).
-4. For each file:
+4. For each file (`renderNote`):
    - Creates a `div.thread-section` with an `h2.thread-note-title`.
    - The `h2` contains a clickable `<a>` that opens the note.
    - Reads file content with `vault.read(file)`.
    - Renders markdown with `MarkdownRenderer.render(app, content, el, sourcePath, this)`.
+5. **Branch only** (`renderContinuation`): appends a trailing `div.thread-section.thread-continuation` pseudo-node — a link "Continued in: `<parent title>`" that re-renders the view in place via `setState({ path: parentRoot })`. Because it navigates to the parent chain's root, nested branches chain up to their spine one hop at a time.
 
 The view is read-only by design (no editor, no CodeMirror). Tab title is `Thread: <basename>`.
 
@@ -186,6 +195,36 @@ Runs **Kosaraju's SCC algorithm** (iterative, no recursion) on `outLinks`/`inLin
 - Multi-node SCC → **cycle node** (shown in red with ↺). One alphabetically-first representative is picked per cycle.
 
 Returns `rootNodes[]`, `cycleNodes[]`, `outLinks`, `inLinks`.
+
+---
+
+## Spine / Branch Partition
+
+### `computeChains(roots, cycleRoots, outLinks): Chain[]`
+
+Partitions all reachable nodes into spines and branches (see
+`docs/premise.md` for the model). `Chain = { root, nodes, parentRoot, isCycle }`;
+`parentRoot === null` marks a spine, `parentRoot !== null` a branch (there is no
+separate `kind` field — it is derivable from `parentRoot`).
+
+**Algorithm:**
+1. Precompute each root's reach size via `chainNotes`.
+2. Order roots by size **descending**, ties broken by root path (`localeCompare`)
+   — so exactly one chain in each overlap group wins and becomes the spine.
+3. Maintain a global `owner: node → root` map. For each root in order, BFS over
+   `outLinks`:
+   - An unowned node is claimed (added to `owner` and this chain's `nodes`) and
+     expanded.
+   - An already-owned node is a **join point**: it (and everything past it, which
+     is already owned — ownership is downward-closed) is not expanded. The first
+     join encountered in BFS order sets `parentRoot`.
+4. A chain that hit no join owns its entire reach and is a **spine**
+   (`parentRoot === null`). A chain that hit a join owns only its unique suffix
+   and is a **branch** whose parent is the immediate chain it joined.
+
+This satisfies the invariant (every node owned exactly once) and the "largest
+chain wins" rule. Cycle roots are passed through as ordinary roots and flagged
+via `isCycle`.
 
 ---
 

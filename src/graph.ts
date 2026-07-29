@@ -9,10 +9,11 @@ import {
 	normalizeChain,
 } from "../core/graph";
 import { computeTitle as coreComputeTitle } from "../core/title";
+import { computeChains as coreComputeChains, type Chain } from "../core/chains";
 import type { LinkMaps, GraphData } from "../core/types";
 
 export { basename, normalizeChain };
-export type { LinkMaps, GraphData };
+export type { LinkMaps, GraphData, Chain };
 
 const LOG_PREFIX = "[note-chain]";
 
@@ -23,6 +24,10 @@ export function buildLinkMaps(app: App): LinkMaps {
 
 export function computeGraph(app: App): GraphData {
 	return coreComputeGraph(buildLinkMaps(app));
+}
+
+export function chainsFromGraph(g: GraphData): Chain[] {
+	return coreComputeChains([...g.rootNodes, ...g.cycleRoots], g.cycleRoots, g.outLinks);
 }
 
 export function computeTitle(

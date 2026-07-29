@@ -1,5 +1,5 @@
 import { ItemView, TFile, WorkspaceLeaf } from "obsidian";
-import { computeGraph, computeTitle, resolveAndSortByCtime } from "./graph";
+import { computeGraph, chainsFromGraph, computeTitle, resolveAndSortByCtime } from "./graph";
 
 const LOG_PREFIX = "[note-chain]";
 
@@ -48,10 +48,16 @@ export class RootNotesView extends ItemView {
 
 		const ul = container.createEl("ul", { cls: "root-notes-list" });
 
+		// One entry per chain (spine or branch); branches get a [branch] prefix.
+		const chains = chainsFromGraph(graphData);
+		const isBranch = new Map<string, boolean>();
+		for (const chain of chains) isBranch.set(chain.root, chain.parentRoot !== null);
+
 		const cycleSet = new Set(cycleRoots);
 		const now = Date.now();
 		for (const file of resolveAndSortByCtime([...rootNodes, ...cycleRoots], this.app)) {
-			const title = computeTitle(file.path, outLinks, inLinks, this.app) ?? file.basename;
+			const baseTitle = computeTitle(file.path, outLinks, inLinks, this.app) ?? file.basename;
+			const title = isBranch.get(file.path) ? `[branch] ${baseTitle}` : baseTitle;
 			const isCycle = cycleSet.has(file.path);
 			const isStale = now - file.stat.ctime > STALE_THRESHOLD_MS;
 			this.createNoteItem(ul, file, title, isCycle, isStale);
