@@ -1,6 +1,6 @@
 {
 	"name": "note-chain",
-	"version": "1.0.21",
+	"version": "1.0.22",
 	"description": "Obsidian plugin that lists root notes (no backlinks) in a side panel",
 	"main": "main.js",
 	"scripts": {
