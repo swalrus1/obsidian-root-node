@@ -1,7 +1,7 @@
 {
 	"id": "chain",
 	"name": "Chain",
-	"version": "1.0.22",
+	"version": "1.0.23",
 	"minAppVersion": "0.15.0",
 	"description": "Link each new note to the last relevant note on the same topic to easily expand a large knowledge base.",
 	"author": "semyon",
