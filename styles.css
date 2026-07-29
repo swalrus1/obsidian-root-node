@@ -103,3 +103,7 @@
     color: var(--text-accent);
     text-decoration: underline;
 }
+
+.thread-continuation .thread-note-title-link {
+    color: var(--text-accent);
+}

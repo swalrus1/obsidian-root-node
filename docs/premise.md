@@ -4,9 +4,32 @@
 
 ## Model
 
-**Note chain** is a set of notes defined by a root node: a note chain contains the root note and any note referenced by any other note in that chain.
+A **chain** is any tree of nodes connected by references: it contains a root node and every note transitively referenced from it.
 
 **Maximum inclusion note chain** is a chain that is not included in any other chain.
+
+### Spines and branches
+
+Because chains overlap (they share an oldest trunk near the sink), we partition
+every node into exactly one **spine** or one **branch**:
+
+- A chain is a **spine** if it is the largest, by node count, among all chains
+  that contain any of its nodes.
+- A chain is **secondary** if it is not a spine. Each secondary chain splits into
+  a **sub-spine** (a prefix — the oldest, shared portion, which is a prefix of
+  some spine) and a **branch** (the rest — the secondary chain's unique newest
+  suffix).
+- **Invariant:** every node belongs to exactly one spine or one branch.
+
+Ties (equal-size overlapping chains) are broken deterministically by root path,
+so exactly one chain in each overlap group is the spine. A branch may itself
+fork off another branch; in that case its parent is the immediate chain it joins,
+not necessarily the spine.
+
+The side panel lists all spines and branches; a branch's name is prefixed with
+`[branch]`. The chain view of a spine shows its full chain; the chain view of a
+branch shows only the branch's own nodes plus a pseudo-node linking to the chain
+view of the chain it joins into.
 
 ## Core idea
 
